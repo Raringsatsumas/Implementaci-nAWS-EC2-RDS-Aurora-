@@ -6,5 +6,5 @@ pymysql
 pytest
 httpx
 cryptography
-python-jose[cryptograpy]
+python-jose[cryptography]
 python-multipart
