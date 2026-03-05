@@ -7,10 +7,7 @@ from ..db import get_db
 router = APIRouter(tags=["stats"])
 
 @router.get("/stats/artists")
-def artists_stats(
-    query: str = Query(""),
-    db: Session = Depends(get_db),
-):
+def artists_stats(query: str = Query(""), db: Session = Depends(get_db)):
     q = f"%{query}%"
     rows = db.execute(
         text("""
@@ -32,10 +29,7 @@ def artists_stats(
 
 
 @router.get("/stats/genres")
-def genres_stats(
-    query: str = Query(""),
-    db: Session = Depends(get_db),
-):
+def genres_stats(query: str = Query(""), db: Session = Depends(get_db)):
     q = f"%{query}%"
     rows = db.execute(
         text("""
