@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 const API = import.meta.env.VITE_API_URL || "/api";
 const authHeaders = (token) => (token ? { Authorization: `Bearer ${token}` } : {});
