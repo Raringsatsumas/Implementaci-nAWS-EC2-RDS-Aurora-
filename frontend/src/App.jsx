@@ -191,6 +191,12 @@ export default function App() {
   }
 
   async function buy(trackId) {
+    // (3) quitar compra repetida también desde el front
+    if (purchasedIds.has(trackId)) {
+      setMsg({ type: "info", text: "Ya compraste esta canción." });
+      return;
+    }
+
     setMsg(null);
     try {
       const r = await fetch(`${API}/v1/purchases`, {
@@ -262,6 +268,12 @@ export default function App() {
     }
     const r = await fetch(`${API}/v1/albums?artist_id=${encodeURIComponent(artistId)}&query=`);
     const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      // no rompas lo que ya sirve, solo muestra mensaje
+      setAdminAlbums([]);
+      setMsg({ type: "error", text: `Cargar álbumes falló: ${data?.detail || `HTTP ${r.status}`}` });
+      return;
+    }
     setAdminAlbums(data.items || []);
   }
 
@@ -363,6 +375,24 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
+  // (2) admin no debe quedarse en compras
+  useEffect(() => {
+    if (role === "admin" && tab === "purchases") setTab("tracks");
+  }, [role, tab]);
+
+  // (4) refrescar compras al entrar a la pestaña compras
+  useEffect(() => {
+    if (tab === "purchases" && token) loadPurchases();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  // carga inicial de stats cuando entras a cada tab
+  useEffect(() => {
+    if (tab === "artists") searchArtistsStats();
+    if (tab === "genres") searchGenresStats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
   useEffect(() => {
     if (token && role === "admin") {
       loadAdminArtists().catch(() => {});
@@ -370,11 +400,13 @@ export default function App() {
     }
   }, [token, role]);
 
+  // (1) CARGA ALBUMES SIEMPRE que: admin + artista seleccionado + albumMode existing
   useEffect(() => {
-    if (token && role === "admin" && createArtistId) {
+    if (token && role === "admin" && createArtistId && albumMode === "existing") {
       loadAlbumsForArtist(createArtistId).catch(() => {});
     }
-  }, [token, role, createArtistId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, role, createArtistId, albumMode]);
 
   // ===========================
   // render
@@ -416,7 +448,11 @@ export default function App() {
         <button onClick={() => setTab("tracks")} disabled={tab === "tracks"}>Tracks</button>
         <button onClick={() => setTab("artists")} disabled={tab === "artists"}>Artistas</button>
         <button onClick={() => setTab("genres")} disabled={tab === "genres"}>Géneros</button>
-        <button onClick={() => setTab("purchases")} disabled={tab === "purchases"}>Mis compras</button>
+
+        {/* (2) Admin NO ve Mis compras */}
+        {role !== "admin" && (
+          <button onClick={() => setTab("purchases")} disabled={tab === "purchases"}>Mis compras</button>
+        )}
       </div>
 
       {/* ADMIN CREATE */}
@@ -443,13 +479,16 @@ export default function App() {
 
             <select
               value={createArtistId}
-              onChange={(e) => setCreateArtistId(e.target.value)}
+              onChange={(e) => {
+                setCreateArtistId(e.target.value);
+                setCreateAlbumId("");
+              }}
               style={{ padding: 10, flex: 2 }}
             >
               <option value="">-- Artista --</option>
               {adminArtists.map((a) => (
                 <option key={a.ArtistId} value={a.ArtistId}>
-                  {a.ArtistName} (albums: {a.AlbumCount}, tracks: {a.TrackCount})
+                  {artistLabel(a)}
                 </option>
               ))}
             </select>
@@ -462,7 +501,7 @@ export default function App() {
               <option value="">-- Género (opcional) --</option>
               {adminGenres.map((g) => (
                 <option key={g.GenreId} value={g.GenreId}>
-                  {g.GenreName} (tracks: {g.TrackCount})
+                  {genreLabel(g)}
                 </option>
               ))}
             </select>
@@ -481,7 +520,12 @@ export default function App() {
                 style={{ padding: 10, flex: 2 }}
                 disabled={!createArtistId}
               >
-                <option value="">{createArtistId ? "-- Álbum --" : "Selecciona artista primero"}</option>
+                <option value="">
+                  {createArtistId
+                    ? (adminAlbums.length ? "-- Álbum --" : "No hay álbumes para este artista")
+                    : "Selecciona artista primero"}
+                </option>
+
                 {adminAlbums.map((al) => (
                   <option key={al.AlbumId} value={al.AlbumId}>
                     {albumLabel(al)}
@@ -529,6 +573,7 @@ export default function App() {
             <tbody>
               {tracks.map((t) => {
                 const alreadyBought = purchasedIds.has(t.TrackId);
+
                 return (
                   <tr key={t.TrackId} style={{ borderBottom: "1px solid #222" }}>
                     <td style={{ padding: 10 }}>
@@ -583,23 +628,25 @@ export default function App() {
                         </>
                       )}
 
-                      {/* USER buy */}
+                      {/* USER buy (3) no permitir comprar más de una vez */}
                       {token && role === "user" && (
                         <>
-                          <input
-                            type="number"
-                            min={1}
-                            value={qty}
-                            onChange={(e) => setQty(e.target.value)}
-                            style={{ width: 70, padding: 6, marginRight: 8 }}
-                          />
-                          <button
-                            onClick={() => buy(t.TrackId)}
-                            disabled={alreadyBought}
-                            style={{ opacity: alreadyBought ? 0.6 : 1 }}
-                          >
-                            {alreadyBought ? "Comprada ✅" : "Comprar"}
-                          </button>
+                          {alreadyBought ? (
+                            <button disabled style={{ opacity: 0.6 }}>
+                              Comprada ✅
+                            </button>
+                          ) : (
+                            <>
+                              <input
+                                type="number"
+                                min={1}
+                                value={qty}
+                                onChange={(e) => setQty(e.target.value)}
+                                style={{ width: 70, padding: 6, marginRight: 8 }}
+                              />
+                              <button onClick={() => buy(t.TrackId)}>Comprar</button>
+                            </>
+                          )}
                         </>
                       )}
                     </td>
@@ -679,8 +726,8 @@ export default function App() {
         </div>
       )}
 
-      {/* PURCHASES TAB */}
-      {tab === "purchases" && (
+      {/* PURCHASES TAB (solo user) */}
+      {tab === "purchases" && role !== "admin" && (
         <div style={{ border: "1px solid #333", borderRadius: 12, padding: 14, marginBottom: 16 }}>
           <h3>Mis compras</h3>
 
@@ -696,9 +743,9 @@ export default function App() {
                 <div style={{ opacity: 0.7 }}>Aún no tienes compras.</div>
               ) : (
                 <ul>
-                  {purchases.map((p) => (
-                    <li key={`${p.InvoiceId}-${p.TrackId}`}>
-                      <b>{p.TrackName}</b> — {p.ArtistName} · {p.GenreName} · qty {p.Quantity} · total {p.LineTotal}
+                  {purchases.map((pp) => (
+                    <li key={`${pp.InvoiceId}-${pp.TrackId}`}>
+                      <b>{pp.TrackName}</b> — {pp.ArtistName} · {pp.GenreName} · qty {pp.Quantity} · total {pp.LineTotal}
                     </li>
                   ))}
                 </ul>
