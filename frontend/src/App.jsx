@@ -1,109 +1,157 @@
 import React, { useEffect, useMemo, useState } from "react";
 
-const API_BASE = "/api";
+const API = import.meta.env.VITE_API_URL || "/api";
+const authHeaders = (token) => (token ? { Authorization: `Bearer ${token}` } : {});
 
-async function apiFetch(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-    ...options,
-  });
+function Alert({ msg, onClose }) {
+  if (!msg) return null;
 
-  const isJson = (res.headers.get("content-type") || "").includes("application/json");
-  const data = isJson ? await res.json() : await res.text();
+  const bg =
+    msg.type === "success"
+      ? "#0f2f1a"
+      : msg.type === "error"
+      ? "#2f0f12"
+      : "#1a1a1a";
 
-  if (!res.ok) {
-    const detail =
-      typeof data === "object" && data !== null
-        ? data.detail || JSON.stringify(data)
-        : data || `HTTP ${res.status}`;
-    throw new Error(detail || `HTTP ${res.status}`);
-  }
-
-  return data;
-}
-
-async function loginRequest(username, password) {
-  const body = new URLSearchParams();
-  body.append("username", username || "");
-  body.append("password", password || "");
-
-  const res = await fetch(`${API_BASE}/v1/auth/login`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: body.toString(),
-  });
-
-  const isJson = (res.headers.get("content-type") || "").includes("application/json");
-  const data = isJson ? await res.json() : await res.text();
-
-  if (!res.ok) {
-    const detail =
-      typeof data === "object" && data !== null
-        ? data.detail || JSON.stringify(data)
-        : data || `HTTP ${res.status}`;
-    throw new Error(detail || `HTTP ${res.status}`);
-  }
-
-  return data;
+  return (
+    <div
+      style={{
+        padding: 12,
+        borderRadius: 10,
+        marginBottom: 14,
+        border: "1px solid #333",
+        background: bg,
+      }}
+    >
+      <b style={{ textTransform: "capitalize" }}>{msg.type}:</b> {msg.text}
+      <button onClick={onClose} style={{ float: "right" }}>
+        x
+      </button>
+    </div>
+  );
 }
 
 export default function App() {
+  // ===== Auth =====
   const [token, setToken] = useState(localStorage.getItem("token") || "");
   const [role, setRole] = useState(localStorage.getItem("role") || "");
   const [username, setUsername] = useState(localStorage.getItem("username") || "");
+  const [msg, setMsg] = useState(null);
 
-  const [authUsername, setAuthUsername] = useState("");
-  const [authEmail, setAuthEmail] = useState("");
-  const [authPassword, setAuthPassword] = useState("");
+  // ===== UI =====
+  const [tab, setTab] = useState("tracks"); // tracks | artists | genres | purchases
 
-  const [msg, setMsg] = useState("");
-  const [err, setErr] = useState("");
+  // ===== Login/Register =====
+  const [u, setU] = useState("admin");
+  const [email, setEmail] = useState("admin@chinook.local");
+  const [p, setP] = useState("Admin123!");
 
-  const [tab, setTab] = useState("tracks");
-
+  // ===== Tracks =====
   const [trackQuery, setTrackQuery] = useState("Love");
   const [tracks, setTracks] = useState([]);
+  const [loadingTracks, setLoadingTracks] = useState(false);
 
-  const [artistsQuery, setArtistsQuery] = useState("");
-  const [artists, setArtists] = useState([]);
-
-  const [genresQuery, setGenresQuery] = useState("");
-  const [genres, setGenres] = useState([]);
-
+  // ===== Purchases (user) =====
   const [purchases, setPurchases] = useState([]);
+  const [loadingPurchases, setLoadingPurchases] = useState(false);
 
+  // ===== Artists stats =====
+  const [artistQuery, setArtistQuery] = useState("");
+  const [artistStats, setArtistStats] = useState([]);
+  const [loadingArtists, setLoadingArtists] = useState(false);
+
+  // ===== Genres stats =====
+  const [genreQuery, setGenreQuery] = useState("");
+  const [genreStats, setGenreStats] = useState([]);
+  const [loadingGenres, setLoadingGenres] = useState(false);
+
+  // ===== Admin: dropdown data =====
+  const [adminArtists, setAdminArtists] = useState([]);
+  const [adminGenres, setAdminGenres] = useState([]);
+  const [adminAlbums, setAdminAlbums] = useState([]);
+
+  // ===== Admin: create form =====
   const [createName, setCreateName] = useState("");
   const [createPrice, setCreatePrice] = useState("0.99");
   const [createArtistId, setCreateArtistId] = useState("");
   const [createGenreId, setCreateGenreId] = useState("");
-  const [albumMode, setAlbumMode] = useState("existing");
-  const [albumId, setAlbumId] = useState("");
-  const [newAlbumTitle, setNewAlbumTitle] = useState("");
-  const [albums, setAlbums] = useState([]);
 
-  const [editTrackId, setEditTrackId] = useState(null);
+  const [albumMode, setAlbumMode] = useState("existing"); // existing | new
+  const [createAlbumId, setCreateAlbumId] = useState("");
+  const [createAlbumTitle, setCreateAlbumTitle] = useState("");
+
+  // ===== Admin: inline edit =====
+  const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState("");
   const [editPrice, setEditPrice] = useState("");
-  const [editGenreId, setEditGenreId] = useState("");
 
-  const authHeaders = token
-    ? {
-        Authorization: `Bearer ${token}`,
+  // ===== Helpers =====
+  const purchasedIds = useMemo(
+    () => new Set((purchases || []).map((x) => x.TrackId)),
+    [purchases]
+  );
+
+  const artistLabel = (a) => a.ArtistName ?? a.Name ?? `Artist ${a.ArtistId}`;
+  const genreLabel = (g) => g.GenreName ?? g.Name ?? `Genre ${g.GenreId}`;
+  const albumLabel = (al) => al.Title ?? al.AlbumTitle ?? `Album ${al.AlbumId}`;
+
+  // ===========================
+  // AUTH
+  // ===========================
+  async function doRegister() {
+    setMsg(null);
+    try {
+      const r = await fetch(`${API}/v1/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: u, email, password: p }),
+      });
+
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || `HTTP ${r.status}`);
+
+      setMsg({ type: "success", text: "Registro OK. Ahora haz login." });
+    } catch (e) {
+      setMsg({ type: "error", text: `Registro falló: ${e.message}` });
+    }
+  }
+
+  async function doLogin() {
+    setMsg(null);
+    try {
+      const body = new URLSearchParams();
+      body.set("username", u);
+      body.set("password", p);
+
+      const r = await fetch(`${API}/v1/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      });
+
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || `HTTP ${r.status}`);
+
+      localStorage.setItem("token", data.access_token);
+      localStorage.setItem("role", data.role);
+      localStorage.setItem("username", data.username);
+
+      setToken(data.access_token);
+      setRole(data.role);
+      setUsername(data.username);
+      setPurchases([]);
+
+      setMsg({
+        type: "success",
+        text: `Login OK como ${data.username} (${data.role})`,
+      });
+
+      if (data.role === "admin") {
+        setTab("tracks");
       }
-    : {};
-
-  const purchasedTrackIds = useMemo(() => {
-    return new Set((purchases || []).map((p) => Number(p.TrackId)));
-  }, [purchases]);
-
-  function clearAlerts() {
-    setMsg("");
-    setErr("");
+    } catch (e) {
+      setMsg({ type: "error", text: `Login falló: ${e.message}` });
+    }
   }
 
   function logout() {
@@ -113,71 +161,263 @@ export default function App() {
     setToken("");
     setRole("");
     setUsername("");
-    setTab("tracks");
     setPurchases([]);
-    clearAlerts();
+    setTab("tracks");
+    setMsg({ type: "info", text: "Sesión cerrada." });
   }
 
-  async function loadTracks(query = trackQuery) {
+  // ===========================
+  // TRACKS
+  // ===========================
+  async function loadTracks() {
+    setLoadingTracks(true);
+    setMsg(null);
     try {
-      const data = await apiFetch(`/v1/tracks?query=${encodeURIComponent(query || "")}`);
+      const r = await fetch(`${API}/v1/tracks?query=${encodeURIComponent(trackQuery)}`);
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || `HTTP ${r.status}`);
       setTracks(data.items || []);
+      if ((data.items || []).length === 0) {
+        setMsg({ type: "info", text: "Sin resultados." });
+      }
     } catch (e) {
-      setErr(`Buscar tracks falló: ${e.message}`);
+      setMsg({ type: "error", text: `Buscar tracks falló: ${e.message}` });
+    } finally {
+      setLoadingTracks(false);
     }
   }
 
-  async function loadArtists(query = artistsQuery) {
-    try {
-      const data = await apiFetch(`/v1/stats/artists?query=${encodeURIComponent(query || "")}`);
-      setArtists(data.items || []);
-    } catch (e) {
-      setErr(`Buscar artistas falló: ${e.message}`);
-    }
-  }
-
-  async function loadGenres(query = genresQuery) {
-    try {
-      const data = await apiFetch(`/v1/stats/genres?query=${encodeURIComponent(query || "")}`);
-      setGenres(data.items || []);
-    } catch (e) {
-      setErr(`Buscar géneros falló: ${e.message}`);
-    }
-  }
-
+  // ===========================
+  // PURCHASES (user)
+  // ===========================
   async function loadPurchases() {
     if (!token || role !== "user") return;
+
+    setLoadingPurchases(true);
     try {
-      const data = await apiFetch("/v1/purchases", {
-        headers: authHeaders,
+      const r = await fetch(`${API}/v1/purchases`, {
+        headers: { ...authHeaders(token) },
       });
+
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || `HTTP ${r.status}`);
+
       setPurchases(data.items || []);
     } catch (e) {
-      setErr(`Cargar compras falló: ${e.message}`);
+      setMsg({ type: "error", text: `Cargar compras falló: ${e.message}` });
+    } finally {
+      setLoadingPurchases(false);
     }
   }
 
-  async function loadAlbumsByArtist(artistId) {
-    if (!artistId) {
-      setAlbums([]);
-      setAlbumId("");
+  async function buy(trackId) {
+    if (purchasedIds.has(trackId)) {
+      setMsg({ type: "info", text: "Ya compraste esta canción." });
       return;
     }
 
+    setMsg(null);
     try {
-      const data = await apiFetch(`/v1/albums?artist_id=${artistId}&query=`);
-      setAlbums(data.items || []);
-      setAlbumId("");
+      const r = await fetch(`${API}/v1/purchases`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(token),
+        },
+        body: JSON.stringify({
+          track_id: trackId,
+          quantity: 1,
+        }),
+      });
+
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || `HTTP ${r.status}`);
+
+      setMsg({ type: "success", text: `Compra OK ✅ Total: ${data.total}` });
+      await loadPurchases();
     } catch (e) {
-      setErr(`Cargar álbumes falló: ${e.message}`);
-      setAlbums([]);
+      setMsg({ type: "error", text: `Compra falló: ${e.message}` });
     }
   }
 
+  // ===========================
+  // STATS: Artists / Genres
+  // ===========================
+  async function searchArtistsStats() {
+    setLoadingArtists(true);
+    setMsg(null);
+    try {
+      const r = await fetch(`${API}/v1/stats/artists?query=${encodeURIComponent(artistQuery)}`);
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || `HTTP ${r.status}`);
+      setArtistStats(data.items || []);
+    } catch (e) {
+      setMsg({ type: "error", text: `Buscar artistas falló: ${e.message}` });
+    } finally {
+      setLoadingArtists(false);
+    }
+  }
+
+  async function searchGenresStats() {
+    setLoadingGenres(true);
+    setMsg(null);
+    try {
+      const r = await fetch(`${API}/v1/stats/genres?query=${encodeURIComponent(genreQuery)}`);
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || `HTTP ${r.status}`);
+      setGenreStats(data.items || []);
+    } catch (e) {
+      setMsg({ type: "error", text: `Buscar géneros falló: ${e.message}` });
+    } finally {
+      setLoadingGenres(false);
+    }
+  }
+
+  // ===========================
+  // ADMIN: load dropdown data
+  // ===========================
+  async function loadAdminArtists() {
+    const r = await fetch(`${API}/v1/stats/artists?query=`);
+    const data = await r.json().catch(() => ({}));
+    setAdminArtists(data.items || []);
+  }
+
+  async function loadAdminGenres() {
+    const r = await fetch(`${API}/v1/stats/genres?query=`);
+    const data = await r.json().catch(() => ({}));
+    setAdminGenres(data.items || []);
+  }
+
+  async function loadAlbumsForArtist(artistId) {
+    if (!artistId) {
+      setAdminAlbums([]);
+      return;
+    }
+
+    const r = await fetch(
+      `${API}/v1/albums?artist_id=${encodeURIComponent(artistId)}&query=`
+    );
+    const data = await r.json().catch(() => ({}));
+
+    if (!r.ok) {
+      setAdminAlbums([]);
+      setMsg({
+        type: "error",
+        text: `Cargar álbumes falló: ${data?.detail || `HTTP ${r.status}`}`,
+      });
+      return;
+    }
+
+    setAdminAlbums(data.items || []);
+  }
+
+  // ===========================
+  // ADMIN: CRUD
+  // ===========================
+  async function adminCreateTrack() {
+    setMsg(null);
+
+    try {
+      if (!createName.trim() || !createArtistId || !createPrice) {
+        throw new Error("Faltan: nombre, artista, precio");
+      }
+
+      const payload = {
+        name: createName.trim(),
+        unit_price: Number(createPrice),
+        artist_id: Number(createArtistId),
+        genre_id: createGenreId ? Number(createGenreId) : 0,
+      };
+
+      if (albumMode === "existing") {
+        if (!createAlbumId) throw new Error("Selecciona un álbum");
+        payload.album_id = Number(createAlbumId);
+      } else {
+        if (!createAlbumTitle.trim()) throw new Error("Escribe el nombre del nuevo álbum");
+        payload.album_title = createAlbumTitle.trim();
+      }
+
+      const r = await fetch(`${API}/v1/admin/tracks`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(token),
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || `HTTP ${r.status}`);
+
+      setMsg({ type: "success", text: `Canción creada ✅ ID=${data.track_id}` });
+
+      setCreateName("");
+      setCreatePrice("0.99");
+      setCreateGenreId("");
+      setCreateAlbumId("");
+      setCreateAlbumTitle("");
+      setAdminAlbums([]);
+
+      await loadTracks();
+    } catch (e) {
+      setMsg({ type: "error", text: `Crear falló: ${e.message}` });
+    }
+  }
+
+  async function adminSaveEdit(trackId) {
+    setMsg(null);
+
+    try {
+      const r = await fetch(`${API}/v1/admin/tracks/${trackId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeaders(token),
+        },
+        body: JSON.stringify({
+          name: editName,
+          unit_price: Number(editPrice),
+        }),
+      });
+
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || `HTTP ${r.status}`);
+
+      setMsg({ type: "success", text: "Canción actualizada ✅" });
+      setEditingId(null);
+      await loadTracks();
+    } catch (e) {
+      setMsg({ type: "error", text: `Editar falló: ${e.message}` });
+    }
+  }
+
+  async function adminDeleteTrack(trackId) {
+    setMsg(null);
+
+    try {
+      const ok = window.confirm(`¿Eliminar TrackId=${trackId}?`);
+      if (!ok) return;
+
+      const r = await fetch(`${API}/v1/admin/tracks/${trackId}`, {
+        method: "DELETE",
+        headers: { ...authHeaders(token) },
+      });
+
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.detail || `HTTP ${r.status}`);
+
+      setMsg({ type: "success", text: "Canción eliminada ✅" });
+      await loadTracks();
+    } catch (e) {
+      setMsg({ type: "error", text: `Eliminar falló: ${e.message}` });
+    }
+  }
+
+  // ===========================
+  // Effects
+  // ===========================
   useEffect(() => {
-    loadTracks(trackQuery);
-    loadArtists("");
-    loadGenres("");
+    loadTracks();
   }, []);
 
   useEffect(() => {
@@ -187,232 +427,38 @@ export default function App() {
   }, [token, role]);
 
   useEffect(() => {
-    if (role === "admin" && albumMode === "existing" && createArtistId) {
-      loadAlbumsByArtist(createArtistId);
-    } else if (albumMode !== "existing") {
-      setAlbums([]);
-      setAlbumId("");
-    }
-  }, [createArtistId, albumMode, role]);
-
-  async function handleLogin() {
-    clearAlerts();
-    try {
-      const data = await loginRequest(authUsername, authPassword);
-
-      localStorage.setItem("token", data.access_token || "");
-      localStorage.setItem("role", data.role || "");
-      localStorage.setItem("username", data.username || authUsername || "");
-
-      setToken(data.access_token || "");
-      setRole(data.role || "");
-      setUsername(data.username || authUsername || "");
-      setMsg("Login OK");
+    if (role === "admin" && tab === "purchases") {
       setTab("tracks");
-
-      if ((data.role || "") === "user") {
-        await loadPurchases();
-      }
-    } catch (e) {
-      setErr(`Login falló: ${e.message}`);
     }
-  }
+  }, [role, tab]);
 
-  async function handleRegister() {
-    clearAlerts();
-    try {
-      await apiFetch("/v1/auth/register", {
-        method: "POST",
-        body: JSON.stringify({
-          username: authUsername,
-          email: authEmail,
-          password: authPassword,
-        }),
-      });
-      setMsg("Registro OK");
-    } catch (e) {
-      setErr(`Register falló: ${e.message}`);
+  useEffect(() => {
+    if (tab === "purchases" && token && role === "user") {
+      loadPurchases();
     }
-  }
+  }, [tab]);
 
-  async function handleBuy(trackId) {
-    clearAlerts();
-    if (!token || role !== "user") {
-      setErr("Debes iniciar sesión como usuario para comprar");
-      return;
+  useEffect(() => {
+    if (tab === "artists") searchArtistsStats();
+    if (tab === "genres") searchGenresStats();
+  }, [tab]);
+
+  useEffect(() => {
+    if (token && role === "admin") {
+      loadAdminArtists().catch(() => {});
+      loadAdminGenres().catch(() => {});
     }
+  }, [token, role]);
 
-    if (purchasedTrackIds.has(Number(trackId))) {
-      setErr("Esa canción ya fue comprada");
-      return;
+  useEffect(() => {
+    if (token && role === "admin" && createArtistId && albumMode === "existing") {
+      loadAlbumsForArtist(createArtistId).catch(() => {});
     }
+  }, [token, role, createArtistId, albumMode]);
 
-    try {
-      await apiFetch("/v1/purchases", {
-        method: "POST",
-        headers: authHeaders,
-        body: JSON.stringify({
-          track_id: trackId,
-        }),
-      });
-
-      setMsg("Compra realizada");
-      await loadPurchases();
-      await loadTracks(trackQuery);
-    } catch (e) {
-      setErr(`Compra falló: ${e.message}`);
-    }
-  }
-
-  function startEdit(track) {
-    clearAlerts();
-    setEditTrackId(track.TrackId);
-    setEditName(track.TrackName || "");
-    setEditPrice(String(track.UnitPrice ?? ""));
-    setEditGenreId(track.GenreId ? String(track.GenreId) : "");
-  }
-
-  function cancelEdit() {
-    setEditTrackId(null);
-    setEditName("");
-    setEditPrice("");
-    setEditGenreId("");
-  }
-
-  async function saveEdit(trackId) {
-    clearAlerts();
-
-    if (!editName.trim()) {
-      setErr("El nombre no puede estar vacío");
-      return;
-    }
-
-    if (editPrice === "" || editPrice === null) {
-      setErr("El precio es obligatorio");
-      return;
-    }
-
-    const parsed = Number(editPrice);
-    if (Number.isNaN(parsed)) {
-      setErr("El precio es inválido");
-      return;
-    }
-
-    if (parsed < 0) {
-      setErr("El precio no puede ser negativo");
-      return;
-    }
-
-    try {
-      await apiFetch(`/v1/admin/tracks/${trackId}`, {
-        method: "PUT",
-        headers: authHeaders,
-        body: JSON.stringify({
-          name: editName.trim(),
-          unit_price: parsed,
-          genre_id: editGenreId || null,
-        }),
-      });
-
-      setMsg("Canción actualizada");
-      cancelEdit();
-      await loadTracks(trackQuery);
-    } catch (e) {
-      setErr(`Editar falló: ${e.message}`);
-    }
-  }
-
-  async function deleteTrack(trackId) {
-    clearAlerts();
-
-    if (!window.confirm("¿Eliminar esta canción?")) return;
-
-    try {
-      await apiFetch(`/v1/admin/tracks/${trackId}`, {
-        method: "DELETE",
-        headers: authHeaders,
-      });
-
-      setMsg("Canción eliminada");
-      await loadTracks(trackQuery);
-    } catch (e) {
-      setErr(`Eliminar falló: ${e.message}`);
-    }
-  }
-
-  async function createTrack() {
-    clearAlerts();
-
-    if (!createName.trim()) {
-      setErr("El nombre es obligatorio");
-      return;
-    }
-
-    if (createPrice === "" || createPrice === null) {
-      setErr("El precio es obligatorio");
-      return;
-    }
-
-    const parsed = Number(createPrice);
-    if (Number.isNaN(parsed)) {
-      setErr("El precio es inválido");
-      return;
-    }
-
-    if (parsed < 0) {
-      setErr("El precio no puede ser negativo");
-      return;
-    }
-
-    if (!createArtistId) {
-      setErr("Selecciona un artista");
-      return;
-    }
-
-    if (albumMode === "existing" && !albumId) {
-      setErr("Selecciona un álbum existente");
-      return;
-    }
-
-    if (albumMode === "new" && !newAlbumTitle.trim()) {
-      setErr("Escribe el título del nuevo álbum");
-      return;
-    }
-
-    try {
-      await apiFetch("/v1/admin/tracks", {
-        method: "POST",
-        headers: authHeaders,
-        body: JSON.stringify({
-          name: createName.trim(),
-          unit_price: parsed,
-          artist_id: createArtistId,
-          genre_id: createGenreId || null,
-          album_mode: albumMode,
-          album_id: albumMode === "existing" ? albumId : null,
-          new_album_title: albumMode === "new" ? newAlbumTitle.trim() : "",
-        }),
-      });
-
-      setMsg("Canción creada");
-      setCreateName("");
-      setCreatePrice("0.99");
-      setCreateArtistId("");
-      setCreateGenreId("");
-      setAlbumMode("existing");
-      setAlbumId("");
-      setNewAlbumTitle("");
-      setAlbums([]);
-
-      await loadTracks(trackQuery);
-      await loadArtists("");
-      await loadGenres("");
-    } catch (e) {
-      setErr(`Crear falló: HTTP 500`);
-      console.error(e);
-    }
-  }
-
+  // ===========================
+  // Render
+  // ===========================
   return (
     <div
       style={{
@@ -427,33 +473,9 @@ export default function App() {
         Admin CRUD · User compras · Stats Artistas/Géneros
       </div>
 
-      {(err || msg) && (
-        <div
-          style={{
-            marginBottom: 14,
-            padding: 14,
-            borderRadius: 10,
-            background: err ? "#5c0f0f" : "#114d22",
-            color: "white",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 12,
-          }}
-        >
-          <div>{err ? `Error: ${err}` : msg}</div>
-          <button onClick={clearAlerts}>x</button>
-        </div>
-      )}
+      <Alert msg={msg} onClose={() => setMsg(null)} />
 
-      {token ? (
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
-          <div>
-            Sesión: <b>{username}</b> · Rol: <b>{role}</b>
-          </div>
-          <button onClick={logout}>Logout</button>
-        </div>
-      ) : (
+      {!token ? (
         <div
           style={{
             border: "1px solid #333",
@@ -463,52 +485,66 @@ export default function App() {
           }}
         >
           <h3>Login / Register</h3>
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
             <input
-              value={authUsername}
-              onChange={(e) => setAuthUsername(e.target.value)}
+              value={u}
+              onChange={(e) => setU(e.target.value)}
               placeholder="username"
-              style={{ padding: 10, flex: 1 }}
+              style={{ flex: 1, padding: 10 }}
             />
             <input
-              value={authEmail}
-              onChange={(e) => setAuthEmail(e.target.value)}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
               placeholder="email"
-              style={{ padding: 10, flex: 1 }}
+              style={{ flex: 1, padding: 10 }}
             />
             <input
-              value={authPassword}
-              onChange={(e) => setAuthPassword(e.target.value)}
-              type="password"
+              value={p}
+              onChange={(e) => setP(e.target.value)}
               placeholder="password"
-              style={{ padding: 10, flex: 1 }}
+              type="password"
+              style={{ flex: 1, padding: 10 }}
             />
           </div>
-          <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
-            <button onClick={handleLogin}>Login</button>
-            <button onClick={handleRegister}>Register</button>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button onClick={doLogin} style={{ padding: "8px 12px" }}>
+              Login
+            </button>
+            <button onClick={doRegister} style={{ padding: "8px 12px" }}>
+              Register
+            </button>
           </div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 14 }}>
+          <div>
+            Sesión: <b>{username}</b> · Rol: <b>{role}</b>
+          </div>
+          <button onClick={logout}>Logout</button>
         </div>
       )}
 
+      {/* Tabs */}
       <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
-        <button disabled={tab === "tracks"} onClick={() => setTab("tracks")}>
+        <button onClick={() => setTab("tracks")} disabled={tab === "tracks"}>
           Tracks
         </button>
-        <button disabled={tab === "artists"} onClick={() => setTab("artists")}>
+        <button onClick={() => setTab("artists")} disabled={tab === "artists"}>
           Artistas
         </button>
-        <button disabled={tab === "genres"} onClick={() => setTab("genres")}>
+        <button onClick={() => setTab("genres")} disabled={tab === "genres"}>
           Géneros
         </button>
-        {role === "user" && (
-          <button disabled={tab === "purchases"} onClick={() => setTab("purchases")}>
+
+        {role !== "admin" && (
+          <button onClick={() => setTab("purchases")} disabled={tab === "purchases"}>
             Mis compras
           </button>
         )}
       </div>
 
-      {role === "admin" && (
+      {/* ADMIN CREATE */}
+      {tab === "tracks" && token && role === "admin" && (
         <div
           style={{
             border: "1px solid #333",
@@ -528,10 +564,9 @@ export default function App() {
             />
 
             <input
-              placeholder="Precio"
               type="number"
-              min="0"
               step="0.01"
+              placeholder="Precio"
               value={createPrice}
               onChange={(e) => setCreatePrice(e.target.value)}
               style={{ padding: 10, width: 140 }}
@@ -539,13 +574,16 @@ export default function App() {
 
             <select
               value={createArtistId}
-              onChange={(e) => setCreateArtistId(e.target.value)}
+              onChange={(e) => {
+                setCreateArtistId(e.target.value);
+                setCreateAlbumId("");
+              }}
               style={{ padding: 10, flex: 2 }}
             >
               <option value="">-- Artista --</option>
-              {artists.map((a) => (
+              {adminArtists.map((a) => (
                 <option key={a.ArtistId} value={a.ArtistId}>
-                  {a.ArtistName}
+                  {artistLabel(a)}
                 </option>
               ))}
             </select>
@@ -556,9 +594,9 @@ export default function App() {
               style={{ padding: 10, flex: 1 }}
             >
               <option value="">-- Género (opcional) --</option>
-              {genres.map((g) => (
+              {adminGenres.map((g) => (
                 <option key={g.GenreId} value={g.GenreId}>
-                  {g.GenreName}
+                  {genreLabel(g)}
                 </option>
               ))}
             </select>
@@ -576,35 +614,43 @@ export default function App() {
 
             {albumMode === "existing" ? (
               <select
-                value={albumId}
-                onChange={(e) => setAlbumId(e.target.value)}
+                value={createAlbumId}
+                onChange={(e) => setCreateAlbumId(e.target.value)}
                 style={{ padding: 10, flex: 2 }}
+                disabled={!createArtistId}
               >
                 <option value="">
-                  {createArtistId ? "-- Álbum --" : "Selecciona artista primero"}
+                  {createArtistId
+                    ? adminAlbums.length
+                      ? "-- Álbum --"
+                      : "No hay álbumes para este artista"
+                    : "Selecciona artista primero"}
                 </option>
-                {albums.map((a) => (
-                  <option key={a.AlbumId} value={a.AlbumId}>
-                    {a.Title}
+
+                {adminAlbums.map((al) => (
+                  <option key={al.AlbumId} value={al.AlbumId}>
+                    {albumLabel(al)}
                   </option>
                 ))}
               </select>
             ) : (
               <input
-                placeholder="Título nuevo álbum"
-                value={newAlbumTitle}
-                onChange={(e) => setNewAlbumTitle(e.target.value)}
+                placeholder="Nombre del nuevo álbum"
+                value={createAlbumTitle}
+                onChange={(e) => setCreateAlbumTitle(e.target.value)}
                 style={{ padding: 10, flex: 2 }}
+                disabled={!createArtistId}
               />
             )}
 
-            <button style={{ padding: "10px 14px" }} onClick={createTrack}>
+            <button onClick={adminCreateTrack} style={{ padding: "10px 14px" }}>
               Crear
             </button>
           </div>
         </div>
       )}
 
+      {/* TRACKS TAB */}
       {tab === "tracks" && (
         <div
           style={{
@@ -615,15 +661,14 @@ export default function App() {
           }}
         >
           <h3>Tracks</h3>
-
           <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
             <input
               value={trackQuery}
               onChange={(e) => setTrackQuery(e.target.value)}
               style={{ flex: 1, padding: 10 }}
             />
-            <button style={{ padding: "8px 12px" }} onClick={() => loadTracks(trackQuery)}>
-              Buscar
+            <button onClick={loadTracks} style={{ padding: "8px 12px" }}>
+              {loadingTracks ? "Cargando..." : "Buscar"}
             </button>
           </div>
 
@@ -638,85 +683,78 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
-              {tracks.map((track) => {
-                const isEditing = editTrackId === track.TrackId;
-                const purchased = purchasedTrackIds.has(Number(track.TrackId));
+              {tracks.map((t) => {
+                const alreadyBought = purchasedIds.has(t.TrackId);
 
                 return (
-                  <tr key={track.TrackId} style={{ borderBottom: "1px solid #222" }}>
+                  <tr key={t.TrackId} style={{ borderBottom: "1px solid #222" }}>
                     <td style={{ padding: 10 }}>
-                      {isEditing ? (
-                        <input
-                          value={editName}
-                          onChange={(e) => setEditName(e.target.value)}
-                          style={{ padding: 8, width: "100%" }}
-                        />
-                      ) : (
-                        <>
-                          <div style={{ fontWeight: 600 }}>{track.TrackName}</div>
-                          <div style={{ fontSize: 12, opacity: 0.75 }}>{track.AlbumTitle}</div>
-                        </>
-                      )}
+                      <div style={{ fontWeight: 600 }}>{t.TrackName}</div>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>{t.AlbumTitle}</div>
                     </td>
-
-                    <td style={{ padding: 10 }}>{track.ArtistName}</td>
-
-                    <td style={{ padding: 10 }}>
-                      {isEditing ? (
-                        <input
-                          value={editGenreId}
-                          onChange={(e) => setEditGenreId(e.target.value)}
-                          style={{ padding: 8, width: 90 }}
-                          placeholder="GenreId"
-                        />
-                      ) : (
-                        track.GenreName
-                      )}
-                    </td>
-
-                    <td style={{ padding: 10 }}>
-                      {isEditing ? (
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={editPrice}
-                          onChange={(e) => setEditPrice(e.target.value)}
-                          style={{ padding: 8, width: 90 }}
-                        />
-                      ) : (
-                        track.UnitPrice
-                      )}
-                    </td>
+                    <td style={{ padding: 10 }}>{t.ArtistName}</td>
+                    <td style={{ padding: 10 }}>{t.GenreName || "-"}</td>
+                    <td style={{ padding: 10 }}>{t.UnitPrice}</td>
 
                     <td style={{ padding: 10, textAlign: "right" }}>
-                      {role === "admin" ? (
-                        isEditing ? (
-                          <>
-                            <button onClick={() => saveEdit(track.TrackId)}>Guardar</button>
-                            <button onClick={cancelEdit} style={{ marginLeft: 8 }}>
-                              Cancelar
+                      {token && role === "admin" && (
+                        <>
+                          {editingId === t.TrackId ? (
+                            <>
+                              <input
+                                value={editName}
+                                onChange={(e) => setEditName(e.target.value)}
+                                style={{ width: 220, padding: 6, marginRight: 8 }}
+                                placeholder="Nuevo nombre"
+                              />
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={editPrice}
+                                onChange={(e) => setEditPrice(e.target.value)}
+                                style={{ width: 110, padding: 6, marginRight: 8 }}
+                                placeholder="Precio"
+                              />
+                              <button onClick={() => adminSaveEdit(t.TrackId)}>Guardar</button>
+                              <button
+                                onClick={() => setEditingId(null)}
+                                style={{ marginLeft: 6 }}
+                              >
+                                Cancelar
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => {
+                                  setEditingId(t.TrackId);
+                                  setEditName(t.TrackName);
+                                  setEditPrice(String(t.UnitPrice));
+                                }}
+                              >
+                                Editar
+                              </button>
+                              <button
+                                onClick={() => adminDeleteTrack(t.TrackId)}
+                                style={{ marginLeft: 8 }}
+                              >
+                                Eliminar
+                              </button>
+                            </>
+                          )}
+                        </>
+                      )}
+
+                      {token && role === "user" && (
+                        <>
+                          {alreadyBought ? (
+                            <button disabled style={{ opacity: 0.6 }}>
+                              Comprada ✅
                             </button>
-                          </>
-                        ) : (
-                          <>
-                            <button onClick={() => startEdit(track)}>Editar</button>
-                            <button
-                              style={{ marginLeft: 8 }}
-                              onClick={() => deleteTrack(track.TrackId)}
-                            >
-                              Eliminar
-                            </button>
-                          </>
-                        )
-                      ) : role === "user" ? (
-                        purchased ? (
-                          <span>Comprada ✅</span>
-                        ) : (
-                          <button onClick={() => handleBuy(track.TrackId)}>Comprar</button>
-                        )
-                      ) : (
-                        <span>-</span>
+                          ) : (
+                            <button onClick={() => buy(t.TrackId)}>Comprar</button>
+                          )}
+                        </>
                       )}
                     </td>
                   </tr>
@@ -727,6 +765,7 @@ export default function App() {
         </div>
       )}
 
+      {/* ARTISTS TAB */}
       {tab === "artists" && (
         <div
           style={{
@@ -737,15 +776,16 @@ export default function App() {
           }}
         >
           <h3>Artistas (Álbumes / Canciones)</h3>
-
           <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
             <input
-              value={artistsQuery}
-              onChange={(e) => setArtistsQuery(e.target.value)}
+              value={artistQuery}
+              onChange={(e) => setArtistQuery(e.target.value)}
               placeholder="Buscar artista..."
               style={{ flex: 1, padding: 10 }}
             />
-            <button onClick={() => loadArtists(artistsQuery)}>Buscar</button>
+            <button onClick={searchArtistsStats}>
+              {loadingArtists ? "..." : "Buscar"}
+            </button>
           </div>
 
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -757,7 +797,7 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
-              {artists.map((a) => (
+              {artistStats.map((a) => (
                 <tr key={a.ArtistId} style={{ borderBottom: "1px solid #222" }}>
                   <td style={{ padding: 10 }}>{a.ArtistName}</td>
                   <td style={{ padding: 10 }}>{a.AlbumCount}</td>
@@ -769,6 +809,7 @@ export default function App() {
         </div>
       )}
 
+      {/* GENRES TAB */}
       {tab === "genres" && (
         <div
           style={{
@@ -778,16 +819,17 @@ export default function App() {
             marginBottom: 16,
           }}
         >
-          <h3>Géneros (Canciones)</h3>
-
+          <h3>Géneros (# Canciones)</h3>
           <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
             <input
-              value={genresQuery}
-              onChange={(e) => setGenresQuery(e.target.value)}
+              value={genreQuery}
+              onChange={(e) => setGenreQuery(e.target.value)}
               placeholder="Buscar género..."
               style={{ flex: 1, padding: 10 }}
             />
-            <button onClick={() => loadGenres(genresQuery)}>Buscar</button>
+            <button onClick={searchGenresStats}>
+              {loadingGenres ? "..." : "Buscar"}
+            </button>
           </div>
 
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -798,7 +840,7 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
-              {genres.map((g) => (
+              {genreStats.map((g) => (
                 <tr key={g.GenreId} style={{ borderBottom: "1px solid #222" }}>
                   <td style={{ padding: 10 }}>{g.GenreName}</td>
                   <td style={{ padding: 10 }}>{g.TrackCount}</td>
@@ -809,7 +851,8 @@ export default function App() {
         </div>
       )}
 
-      {tab === "purchases" && role === "user" && (
+      {/* PURCHASES TAB */}
+      {tab === "purchases" && role !== "admin" && (
         <div
           style={{
             border: "1px solid #333",
@@ -820,26 +863,28 @@ export default function App() {
         >
           <h3>Mis compras</h3>
 
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ textAlign: "left", borderBottom: "1px solid #333" }}>
-                <th style={{ padding: 10 }}>Track</th>
-                <th style={{ padding: 10 }}>Artist</th>
-                <th style={{ padding: 10 }}>Genre</th>
-                <th style={{ padding: 10 }}>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {purchases.map((p, idx) => (
-                <tr key={`${p.InvoiceId}-${p.TrackId}-${idx}`} style={{ borderBottom: "1px solid #222" }}>
-                  <td style={{ padding: 10 }}>{p.TrackName}</td>
-                  <td style={{ padding: 10 }}>{p.ArtistName}</td>
-                  <td style={{ padding: 10 }}>{p.GenreName}</td>
-                  <td style={{ padding: 10 }}>{p.LineTotal}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {!token ? (
+            <div style={{ opacity: 0.75 }}>Inicia sesión para ver tus compras.</div>
+          ) : (
+            <>
+              <button onClick={loadPurchases} style={{ marginBottom: 10 }}>
+                {loadingPurchases ? "Cargando..." : "Refrescar"}
+              </button>
+
+              {purchases.length === 0 ? (
+                <div style={{ opacity: 0.7 }}>Aún no tienes compras.</div>
+              ) : (
+                <ul>
+                  {purchases.map((pp) => (
+                    <li key={`${pp.InvoiceId}-${pp.TrackId}`}>
+                      <b>{pp.TrackName}</b> — {pp.ArtistName} · {pp.GenreName} · qty{" "}
+                      {pp.Quantity} · total {pp.LineTotal}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
         </div>
       )}
     </div>
