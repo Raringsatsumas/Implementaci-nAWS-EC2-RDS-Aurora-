@@ -1,19 +1,3 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import text
-from sqlalchemy.orm import Session
-
-from ..db import get_db
-from .auth import get_current_user
-
-router = APIRouter(prefix="/admin/tracks", tags=["admin-tracks"])
-
-
-def require_admin(user=Depends(get_current_user)):
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Solo admin")
-    return user
-
-
 @router.post("")
 def create_track(
     payload: dict,
@@ -22,12 +6,12 @@ def create_track(
 ):
     try:
         name = (payload.get("name") or "").strip()
-        unit_price = payload.get("unit_price")
-        genre_id = payload.get("genre_id")
-        media_type_id = payload.get("media_type_id") or 1
+        raw_unit_price = payload.get("unit_price")
+        raw_genre_id = payload.get("genre_id")
+        raw_media_type_id = payload.get("media_type_id")
         composer = payload.get("composer")
         milliseconds = int(payload.get("milliseconds") or 1)
-        bytes_value = int(payload.get("bytes") or 1)
+        bytes_value = payload.get("bytes")
 
         album_id = payload.get("album_id")
         album_mode = payload.get("album_mode") or payload.get("album_source")
@@ -42,18 +26,18 @@ def create_track(
         if not name:
             raise HTTPException(status_code=400, detail="Nombre requerido")
 
-        if unit_price is None or str(unit_price).strip() == "":
+        if raw_unit_price is None or str(raw_unit_price).strip() == "":
             raise HTTPException(status_code=400, detail="Precio requerido")
 
         try:
-            unit_price = float(unit_price)
+            unit_price = float(raw_unit_price)
         except Exception:
             raise HTTPException(status_code=400, detail="Precio inválido")
 
         if unit_price < 0:
             raise HTTPException(status_code=400, detail="El precio no puede ser negativo")
 
-        # Si no viene album_id, intentamos crear uno nuevo si mandan artista + título
+        # Si no viene album_id, crear álbum nuevo cuando corresponda
         if not album_id:
             if album_mode == "new" or new_album_title:
                 if not artist_id:
@@ -81,6 +65,42 @@ def create_track(
             else:
                 raise HTTPException(status_code=400, detail="Álbum requerido")
 
+        # Validar que el álbum exista
+        album_exists = db.execute(
+            text("SELECT AlbumId FROM Album WHERE AlbumId = :album_id"),
+            {"album_id": int(album_id)},
+        ).mappings().first()
+        if not album_exists:
+            raise HTTPException(status_code=400, detail="Álbum inválido")
+
+        # Resolver MediaTypeId válido
+        if raw_media_type_id not in (None, "", 0, "0"):
+            media_type_id = int(raw_media_type_id)
+            media_exists = db.execute(
+                text("SELECT MediaTypeId FROM MediaType WHERE MediaTypeId = :media_type_id"),
+                {"media_type_id": media_type_id},
+            ).mappings().first()
+            if not media_exists:
+                raise HTTPException(status_code=400, detail="MediaType inválido")
+        else:
+            media_row = db.execute(
+                text("SELECT MediaTypeId FROM MediaType ORDER BY MediaTypeId LIMIT 1")
+            ).mappings().first()
+            if not media_row:
+                raise HTTPException(status_code=400, detail="No hay MediaType disponible")
+            media_type_id = int(media_row["MediaTypeId"])
+
+        # Resolver GenreId válido o null
+        genre_id = None
+        if raw_genre_id not in (None, "", 0, "0"):
+            genre_id = int(raw_genre_id)
+            genre_exists = db.execute(
+                text("SELECT GenreId FROM Genre WHERE GenreId = :genre_id"),
+                {"genre_id": genre_id},
+            ).mappings().first()
+            if not genre_exists:
+                raise HTTPException(status_code=400, detail="Género inválido")
+
         next_track_row = db.execute(
             text("SELECT COALESCE(MAX(TrackId), 0) + 1 AS next_id FROM Track")
         ).mappings().first()
@@ -97,11 +117,11 @@ def create_track(
                 "track_id": next_track_id,
                 "name": name,
                 "album_id": int(album_id),
-                "media_type_id": int(media_type_id),
-                "genre_id": int(genre_id) if genre_id not in (None, "", 0, "0") else None,
+                "media_type_id": media_type_id,
+                "genre_id": genre_id,
                 "composer": composer,
                 "milliseconds": milliseconds,
-                "bytes_value": bytes_value,
+                "bytes_value": int(bytes_value) if bytes_value not in (None, "", 0, "0") else None,
                 "unit_price": unit_price,
             },
         )
@@ -114,107 +134,3 @@ def create_track(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error creando track: {str(e)}")
-
-
-@router.put("/{track_id}")
-def update_track(
-    track_id: int,
-    payload: dict,
-    db: Session = Depends(get_db),
-    _: dict = Depends(require_admin),
-):
-    try:
-        exists = db.execute(
-            text("SELECT TrackId FROM Track WHERE TrackId = :track_id"),
-            {"track_id": track_id},
-        ).mappings().first()
-
-        if not exists:
-            raise HTTPException(status_code=404, detail="Track no encontrado")
-
-        fields = []
-        params = {"track_id": track_id}
-
-        if "name" in payload:
-            fields.append("Name = :name")
-            params["name"] = (payload.get("name") or "").strip()
-
-        if "unit_price" in payload:
-            raw_price = payload.get("unit_price")
-
-            if raw_price is None or str(raw_price).strip() == "":
-                raise HTTPException(status_code=400, detail="Precio requerido")
-
-            try:
-                parsed_price = float(raw_price)
-            except Exception:
-                raise HTTPException(status_code=400, detail="Precio inválido")
-
-            if parsed_price < 0:
-                raise HTTPException(status_code=400, detail="El precio no puede ser negativo")
-
-            fields.append("UnitPrice = :unit_price")
-            params["unit_price"] = parsed_price
-
-        if "genre_id" in payload:
-            fields.append("GenreId = :genre_id")
-            genre_id = payload.get("genre_id")
-            params["genre_id"] = int(genre_id) if genre_id not in (None, "", 0, "0") else None
-
-        if "album_id" in payload:
-            fields.append("AlbumId = :album_id")
-            params["album_id"] = int(payload.get("album_id"))
-
-        if "media_type_id" in payload:
-            fields.append("MediaTypeId = :media_type_id")
-            params["media_type_id"] = int(payload.get("media_type_id"))
-
-        if not fields:
-            return {"ok": True, "updated": False}
-
-        sql = f"UPDATE Track SET {', '.join(fields)} WHERE TrackId = :track_id"
-        db.execute(text(sql), params)
-        db.commit()
-
-        return {"ok": True, "updated": True}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error actualizando track: {str(e)}")
-
-
-@router.delete("/{track_id}")
-def delete_track(
-    track_id: int,
-    db: Session = Depends(get_db),
-    _: dict = Depends(require_admin),
-):
-    try:
-        db.execute(
-            text("DELETE FROM InvoiceLine WHERE TrackId = :track_id"),
-            {"track_id": track_id},
-        )
-        db.execute(
-            text("DELETE FROM PlaylistTrack WHERE TrackId = :track_id"),
-            {"track_id": track_id},
-        )
-
-        result = db.execute(
-            text("DELETE FROM Track WHERE TrackId = :track_id"),
-            {"track_id": track_id},
-        )
-
-        if result.rowcount == 0:
-            db.rollback()
-            raise HTTPException(status_code=404, detail="Track no encontrado")
-
-        db.commit()
-        return {"ok": True}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error eliminando track: {str(e)}")
