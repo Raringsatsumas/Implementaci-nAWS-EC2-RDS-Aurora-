@@ -1,6 +1,6 @@
 # BigParcial
 
-Aplicación web full-stack desarrollada para gestionar la base de datos **Chinook** en la nube, con funcionalidades de compra de canciones, autenticación con roles, administración de canciones, pruebas unitarias y pipeline de CI/CD.
+Aplicación web full-stack desarrollada para gestionar la base de datos Chinook en la nube, con funcionalidades de compra de canciones, autenticación con roles, administración de canciones, pruebas unitarias y pipeline de CI/CD.
 
 ## Descripción
 
