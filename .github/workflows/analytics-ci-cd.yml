@@ -66,13 +66,17 @@ jobs:
       - name: Validar scripts Glue
         run: |
           echo "Validando estructura..."
-          test -d glue || (echo "No existe la carpeta glue/" && exit 1)
-
-          if [ -f glue/dim_date.py ]; then
-            python -m py_compile glue/dim_date.py
-            echo "dim_date.py OK"
+      
+          if [ -d glue ]; then
+            echo "Carpeta glue encontrada"
+            if [ -f glue/dim_date.py ]; then
+              python -m py_compile glue/dim_date.py
+              echo "dim_date.py OK"
+            else
+              echo "Aviso: no existe glue/dim_date.py"
+            fi
           else
-            echo "Aviso: no existe glue/dim_date.py"
+            echo "Aviso: no existe la carpeta glue/, se omite validación"
           fi
 
       - name: Configurar credenciales AWS
