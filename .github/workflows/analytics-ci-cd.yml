@@ -36,7 +36,6 @@ env:
   GLUE_SCRIPTS_BUCKET: chinook-glue-scripts
   GLUE_SCRIPTS_PREFIX: jobs
 
-  # Ajusta estos nombres si en Glue quedaron distintos
   GLUE_JOB_DIM_DATE: etl_dim_date
   GLUE_JOB_DIM_CUSTOMER: etl_dim_customer
   GLUE_JOB_DIM_TRACK: etl_dim_track
@@ -44,7 +43,6 @@ env:
   GLUE_JOB_CUSTOMER_FULL_COPY: etl_customer_full_copy
   GLUE_JOB_EMPLOYEE_REPORTS_FULL_COPY: etl_employee_reports_full_copy
 
-  # Ajusta estos nombres si tus crawlers tienen otro nombre
   GLUE_CRAWLER_DIM_DATE: crawler_dim_date
   GLUE_CRAWLER_DIM_CUSTOMER: crawler_dim_customer
   GLUE_CRAWLER_DIM_TRACK: crawler_dim_track
