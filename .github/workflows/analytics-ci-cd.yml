@@ -1,0 +1,121 @@
+# .github/workflows/analytics-ci-cd.yml
+name: Partial 2 - Analytics CI/CD
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_glue_jobs:
+        description: "Lanzar jobs de Glue"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      run_crawlers:
+        description: "Lanzar crawlers"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+  push:
+    branches:
+      - main
+    paths:
+      - "glue/**"
+      - ".github/workflows/analytics-ci-cd.yml"
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  GLUE_SCRIPTS_BUCKET: chinook-glue-scripts
+  GLUE_SCRIPTS_PREFIX: jobs
+
+  # Ajusta estos nombres si en Glue quedaron distintos
+  GLUE_JOB_DIM_DATE: etl_dim_date
+  GLUE_JOB_DIM_CUSTOMER: etl_dim_customer
+  GLUE_JOB_DIM_TRACK: etl_dim_track
+  GLUE_JOB_FACT_SALES: etl_fact_sales
+  GLUE_JOB_CUSTOMER_FULL_COPY: etl_customer_full_copy
+  GLUE_JOB_EMPLOYEE_REPORTS_FULL_COPY: etl_employee_reports_full_copy
+
+  # Ajusta estos nombres si tus crawlers tienen otro nombre
+  GLUE_CRAWLER_DIM_DATE: crawler_dim_date
+  GLUE_CRAWLER_DIM_CUSTOMER: crawler_dim_customer
+  GLUE_CRAWLER_DIM_TRACK: crawler_dim_track
+  GLUE_CRAWLER_FACT_SALES: crawler_fact_sales
+  GLUE_CRAWLER_CUSTOMER_FULL_COPY: crawler_customer_full_copy
+  GLUE_CRAWLER_EMPLOYEE_REPORTS_FULL_COPY: crawler_employee_reports_full_copy
+
+jobs:
+  analytics-cicd:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validar scripts Glue
+        run: |
+          echo "Validando estructura..."
+          test -d glue || (echo "No existe la carpeta glue/" && exit 1)
+
+          if [ -f glue/dim_date.py ]; then
+            python -m py_compile glue/dim_date.py
+            echo "dim_date.py OK"
+          else
+            echo "Aviso: no existe glue/dim_date.py"
+          fi
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v6.1.0
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+
+      - name: Subir scripts a S3
+        run: |
+          aws s3 sync glue/ s3://${GLUE_SCRIPTS_BUCKET}/${GLUE_SCRIPTS_PREFIX}/
+          aws s3 ls s3://${GLUE_SCRIPTS_BUCKET}/${GLUE_SCRIPTS_PREFIX}/ --recursive
+
+      - name: Lanzar jobs de Glue
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_glue_jobs == 'true' }}
+        run: |
+          for job in \
+            "${GLUE_JOB_DIM_DATE}" \
+            "${GLUE_JOB_DIM_CUSTOMER}" \
+            "${GLUE_JOB_DIM_TRACK}" \
+            "${GLUE_JOB_FACT_SALES}" \
+            "${GLUE_JOB_CUSTOMER_FULL_COPY}" \
+            "${GLUE_JOB_EMPLOYEE_REPORTS_FULL_COPY}"
+          do
+            echo "Iniciando job: $job"
+            aws glue start-job-run --job-name "$job"
+          done
+
+      - name: Lanzar crawlers
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_crawlers == 'true' }}
+        run: |
+          for crawler in \
+            "${GLUE_CRAWLER_DIM_DATE}" \
+            "${GLUE_CRAWLER_DIM_CUSTOMER}" \
+            "${GLUE_CRAWLER_DIM_TRACK}" \
+            "${GLUE_CRAWLER_FACT_SALES}" \
+            "${GLUE_CRAWLER_CUSTOMER_FULL_COPY}" \
+            "${GLUE_CRAWLER_EMPLOYEE_REPORTS_FULL_COPY}"
+          do
+            echo "Iniciando crawler: $crawler"
+            aws glue start-crawler --name "$crawler" || echo "No se pudo iniciar $crawler (puede que ya esté corriendo)"
+          done
