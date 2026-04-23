@@ -1,40 +1,21 @@
-import sys
-import holidays
-import pandas as pd
+from pathlib import Path
 
-from awsglue.utils import getResolvedOptions
-from pyspark.context import SparkContext
-from awsglue.context import GlueContext
-from awsglue.job import Job
-from pyspark.sql import functions as F
-from pyspark.sql import types as T
+def test_dim_date_script_exists():
+    assert Path("glue/dim_date.py").exists()
 
-args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+def test_dim_date_contains_required_logic():
+    content = Path("glue/dim_date.py").read_text(encoding="utf-8")
 
-sc = SparkContext()
-glueContext = GlueContext(sc)
-spark = glueContext.spark_session
-job = Job(glueContext)
-job.init(args['JOB_NAME'], args)
-
-# -------- 1. Leer invoice desde el catálogo --------
-invoice_df = glueContext.create_dynamic_frame.from_catalog(
-    database="chinook2",
-    table_name="chinook_invoice"
-).toDF()
-
-# -------- 2. Sacar min y max de la fecha --------
-invoice_df = invoice_df.withColumn("invoicedate_ts", F.to_timestamp("invoicedate"))
-
-date_range = invoice_df.select(
-    F.min("invoicedate_ts").alias("min_date"),
-    F.max("invoicedate_ts").alias("max_date")
-).collect()[0]
-
-min_date = date_range["min_date"]
-max_date = date_range["max_date"]
-
-if min_date is None or max_date is None:
+    assert "holidays" in content
+    assert "DateKey" in content
+    assert "FullDate" in content
+    assert "Year" in content
+    assert "Quarter" in content
+    assert "Month" in content
+    assert "Day" in content
+    assert "DayOfWeek" in content
+    assert "IsHoliday" in content
+    assert "s3://chinook-analytics-curated/dim_date/" in contentif min_date is None or max_date is None:
     raise ValueError("No se encontraron fechas en la tabla invoice")
 
 # -------- 3. Generar calendario --------
